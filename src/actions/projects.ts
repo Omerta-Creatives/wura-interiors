@@ -12,7 +12,7 @@ import {
   type ActionState,
 } from "@/lib/action-helpers";
 import { getAdmin } from "@/lib/auth";
-import { BUCKETS } from "@/lib/env";
+import { dbQuery } from "@/lib/db";
 import {
   formToObject,
   projectSchema,
@@ -32,15 +32,35 @@ export async function createProject(
   const parsed = parseInput(projectSchema, formToObject(formData, ["featured"]));
   if (parsed.error) return parsed.error;
 
-  const { data, error } = await admin.supabase
-    .from("projects")
-    .insert({ ...parsed.data, status: "draft", created_by: admin.user.id })
-    .select("id")
-    .single();
+  let createdId: string;
+  try {
+    const { rows } = await dbQuery<{ id: string }>(
+      `INSERT INTO projects (
+         title, slug, summary, description, category_id, location, completed_on, featured, status, created_by
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'draft', $9)
+       RETURNING id`,
+      [
+        parsed.data.title,
+        parsed.data.slug,
+        parsed.data.summary,
+        parsed.data.description,
+        parsed.data.category_id,
+        parsed.data.location,
+        parsed.data.completed_on,
+        parsed.data.featured,
+        admin.user.id,
+      ],
+    );
+    createdId = rows[0].id;
+  } catch (err) {
+    return dbFailure(err as { code?: string; message?: string }, {
+      uniqueField: "slug",
+      uniqueMessage: SLUG_TAKEN,
+    });
+  }
 
-  if (error) return dbFailure(error, { uniqueField: "slug", uniqueMessage: SLUG_TAKEN });
-
-  redirect(`/admin/projects/${data.id}?created=1`);
+  redirect(`/admin/projects/${createdId}?created=1`);
 }
 
 export async function updateProject(
@@ -56,21 +76,47 @@ export async function updateProject(
   const parsed = parseInput(projectSchema, formToObject(formData, ["featured"]));
   if (parsed.error) return parsed.error;
 
-  const { data, error } = await admin.supabase
-    .from("projects")
-    .update(parsed.data)
-    .eq("id", id.data)
-    .select("id")
-    .maybeSingle();
+  try {
+    const { rowCount } = await dbQuery(
+      `UPDATE projects
+       SET title = $1,
+           slug = $2,
+           summary = $3,
+           description = $4,
+           category_id = $5,
+           location = $6,
+           completed_on = $7,
+           featured = $8,
+           updated_at = NOW()
+       WHERE id = $9`,
+      [
+        parsed.data.title,
+        parsed.data.slug,
+        parsed.data.summary,
+        parsed.data.description,
+        parsed.data.category_id,
+        parsed.data.location,
+        parsed.data.completed_on,
+        parsed.data.featured,
+        id.data,
+      ],
+    );
+    if (!rowCount) return fail("Project not found.");
 
-  if (error) return dbFailure(error, { uniqueField: "slug", uniqueMessage: SLUG_TAKEN });
-  if (!data) return fail("Project not found.");
-
-  revalidatePublic();
-  return succeed("Project details saved.");
+    revalidatePublic();
+    return succeed("Project details saved.");
+  } catch (err) {
+    return dbFailure(err as { code?: string; message?: string }, {
+      uniqueField: "slug",
+      uniqueMessage: SLUG_TAKEN,
+    });
+  }
 }
 
-export async function setProjectStatus(id: string, status: string): Promise<ActionResult> {
+export async function setProjectStatus(
+  id: string,
+  status: string,
+): Promise<ActionResult> {
   const admin = await getAdmin();
   if (!admin) return UNAUTHORISED;
 
@@ -78,51 +124,45 @@ export async function setProjectStatus(id: string, status: string): Promise<Acti
   const parsedStatus = projectStatusSchema.safeParse(status);
   if (!parsedId.success || !parsedStatus.success) return fail("Invalid request.");
 
-  const { supabase } = admin;
+  try {
+    if (parsedStatus.data === "published") {
+      const { rows: images } = await dbQuery<{ id: string; is_cover: boolean }>(
+        `SELECT id, is_cover FROM project_images WHERE project_id = $1 ORDER BY sort_order ASC`,
+        [parsedId.data],
+      );
+      if (images.length === 0) {
+        return fail("Upload or add at least one image before publishing this project.");
+      }
 
-  if (parsedStatus.data === "published") {
-    const { count } = await supabase
-      .from("project_images")
-      .select("id", { count: "exact", head: true })
-      .eq("project_id", parsedId.data);
-    if (!count) return fail("Upload at least one image before publishing this project.");
-
-    // Make sure a cover image is chosen.
-    const { data: cover } = await supabase
-      .from("project_images")
-      .select("id")
-      .eq("project_id", parsedId.data)
-      .eq("is_cover", true)
-      .maybeSingle();
-    if (!cover) {
-      const { data: first } = await supabase
-        .from("project_images")
-        .select("id")
-        .eq("project_id", parsedId.data)
-        .order("sort_order")
-        .limit(1)
-        .maybeSingle();
-      if (first) await supabase.from("project_images").update({ is_cover: true }).eq("id", first.id);
+      const hasCover = images.some((i) => i.is_cover);
+      if (!hasCover) {
+        await dbQuery(`UPDATE project_images SET is_cover = true WHERE id = $1`, [
+          images[0].id,
+        ]);
+      }
     }
+
+    const { rowCount } = await dbQuery(
+      `UPDATE projects
+       SET status = $1,
+           published_at = CASE WHEN $1 = 'published' THEN COALESCE(published_at, NOW()) ELSE published_at END,
+           updated_at = NOW()
+       WHERE id = $2`,
+      [parsedStatus.data, parsedId.data],
+    );
+
+    if (!rowCount) return fail("Project not found.");
+
+    revalidatePublic();
+    const messages = {
+      published: "Project published — it is now live on the website.",
+      draft: "Project unpublished and returned to draft.",
+      archived: "Project archived and removed from the website.",
+    } as const;
+    return succeed(messages[parsedStatus.data]);
+  } catch (err) {
+    return dbFailure(err as { code?: string; message?: string });
   }
-
-  const { data, error } = await supabase
-    .from("projects")
-    .update({ status: parsedStatus.data })
-    .eq("id", parsedId.data)
-    .select("id")
-    .maybeSingle();
-
-  if (error) return dbFailure(error);
-  if (!data) return fail("Project not found.");
-
-  revalidatePublic();
-  const messages = {
-    published: "Project published — it is now live on the website.",
-    draft: "Project unpublished and returned to draft.",
-    archived: "Project archived and removed from the website.",
-  } as const;
-  return succeed(messages[parsedStatus.data]);
 }
 
 export async function deleteProject(id: string): Promise<ActionResult> {
@@ -132,22 +172,11 @@ export async function deleteProject(id: string): Promise<ActionResult> {
   const parsedId = uuidSchema.safeParse(id);
   if (!parsedId.success) return fail("Invalid project.");
 
-  const { supabase } = admin;
-
-  const { data: images } = await supabase
-    .from("project_images")
-    .select("storage_path")
-    .eq("project_id", parsedId.data);
-
-  const paths = (images ?? []).map((i) => i.storage_path as string);
-  if (paths.length > 0) {
-    const { error: storageError } = await supabase.storage.from(BUCKETS.projects).remove(paths);
-    if (storageError) console.error("[projects] storage cleanup failed:", storageError.message);
+  try {
+    await dbQuery(`DELETE FROM projects WHERE id = $1`, [parsedId.data]);
+    revalidatePublic();
+    return succeed("Project deleted.");
+  } catch (err) {
+    return dbFailure(err as { code?: string; message?: string });
   }
-
-  const { error } = await supabase.from("projects").delete().eq("id", parsedId.data);
-  if (error) return dbFailure(error);
-
-  revalidatePublic();
-  return succeed("Project deleted.");
 }

@@ -3,6 +3,7 @@
 import { ArrowUpRight, Plus } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
+import { productImageUrl } from "@/lib/storage";
 import { formatPrice } from "@/lib/utils";
 import type { StoreProduct } from "@/types";
 import { useCart } from "./CartProvider";
@@ -15,13 +16,17 @@ export function ProductCard({
   priority?: boolean;
 }) {
   const { addItem } = useCart();
+  const isOutOfStock =
+    product.availability === "in_stock" &&
+    typeof product.stock_quantity === "number" &&
+    product.stock_quantity <= 0;
 
   return (
     <article className="group flex flex-col border border-ink/10 bg-ivory-light/90 transition-all duration-300 hover:border-gold/60 hover:shadow-[0_20px_50px_-20px_rgba(17,17,17,0.18)]">
       <div className="relative aspect-[4/5] overflow-hidden bg-ink/10">
         <Link href={`/store/${product.slug}`} className="block h-full w-full">
           <Image
-            src={product.image_path}
+            src={productImageUrl(product.image_path)}
             alt={product.alt_text}
             fill
             priority={priority}
@@ -35,24 +40,32 @@ export function ProductCard({
         {/* Availability pill */}
         <span
           className={`pointer-events-none absolute left-4 top-4 px-3 py-1 text-[0.65rem] font-semibold uppercase tracking-[0.2em] ${
-            product.availability === "in_stock"
-              ? "bg-ink/90 text-gold backdrop-blur-sm"
-              : "bg-ivory/95 text-ink backdrop-blur-sm"
+            isOutOfStock
+              ? "bg-red-900/90 text-ivory backdrop-blur-sm"
+              : product.availability === "in_stock"
+                ? "bg-ink/90 text-gold backdrop-blur-sm"
+                : "bg-ivory/95 text-ink backdrop-blur-sm"
           }`}
         >
-          {product.availability === "in_stock" ? "In Stock" : "Made to Order"}
+          {isOutOfStock
+            ? "Sold Out"
+            : product.availability === "in_stock"
+              ? "In Stock"
+              : "Made to Order"}
         </span>
 
         {/* Quick add button */}
-        <button
-          type="button"
-          onClick={() => addItem(product, 1)}
-          aria-label={`Add ${product.name} to bag`}
-          className="absolute bottom-4 right-4 inline-flex items-center gap-1.5 border border-gold/60 bg-ink/90 px-3.5 py-2 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-ivory backdrop-blur-sm transition-colors hover:bg-gold hover:text-ink"
-        >
-          <Plus className="h-3.5 w-3.5" aria-hidden />
-          Add to Bag
-        </button>
+        {!isOutOfStock && (
+          <button
+            type="button"
+            onClick={() => addItem(product, 1)}
+            aria-label={`Add ${product.name} to bag`}
+            className="absolute bottom-4 right-4 inline-flex items-center gap-1.5 border border-gold/60 bg-ink/90 px-3.5 py-2 text-[0.68rem] font-semibold uppercase tracking-[0.16em] text-ivory backdrop-blur-sm transition-colors hover:bg-gold hover:text-ink"
+          >
+            <Plus className="h-3.5 w-3.5" aria-hidden />
+            Add to Bag
+          </button>
+        )}
       </div>
 
       <div className="flex flex-1 flex-col justify-between p-6">

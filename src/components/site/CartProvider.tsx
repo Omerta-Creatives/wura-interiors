@@ -1,6 +1,6 @@
 "use client";
 
-import { Minus, Plus, ShoppingBag, Trash2, X } from "lucide-react";
+import { Lock, Minus, Plus, ShoppingBag, Trash2, X } from "lucide-react";
 import Image from "next/image";
 import Link from "next/link";
 import {
@@ -12,6 +12,8 @@ import {
   useRef,
   useState,
 } from "react";
+import { SHIPPING_CONFIG } from "@/lib/env";
+import { productImageUrl } from "@/lib/storage";
 import { formatPrice, whatsappLink } from "@/lib/utils";
 import type { StoreProduct } from "@/types";
 
@@ -24,6 +26,10 @@ interface CartContextValue {
   items: CartItem[];
   totalItems: number;
   subtotal: number;
+  deliveryFee: number;
+  total: number;
+  notes: string;
+  setNotes: (notes: string) => void;
   addItem: (product: StoreProduct, quantity?: number) => void;
   removeItem: (productId: string) => void;
   updateQuantity: (productId: string, quantity: number) => void;
@@ -35,6 +41,7 @@ interface CartContextValue {
 const CartContext = createContext<CartContextValue | null>(null);
 
 const STORAGE_KEY = "wura-interiors-cart-v1";
+const NOTES_STORAGE_KEY = "wura-interiors-cart-notes-v1";
 
 export function useCart(): CartContextValue {
   const ctx = useContext(CartContext);
@@ -66,6 +73,8 @@ export function CartProvider({
         const parsed = JSON.parse(raw) as CartItem[];
         if (Array.isArray(parsed)) setItems(parsed);
       }
+      const savedNotes = window.localStorage.getItem(NOTES_STORAGE_KEY);
+      if (savedNotes) setNotes(savedNotes);
     } catch {
       // Ignore storage errors
     } finally {
@@ -83,7 +92,16 @@ export function CartProvider({
     }
   }, [items, hydrated]);
 
-  // Fallback for browsers without <dialog closedby="any"> support (light-dismiss-a-dialog)
+  useEffect(() => {
+    if (!hydrated) return;
+    try {
+      window.localStorage.setItem(NOTES_STORAGE_KEY, notes);
+    } catch {
+      // Ignore storage errors
+    }
+  }, [notes, hydrated]);
+
+  // Fallback for browsers without <dialog closedby="any"> support
   useEffect(() => {
     const dialog = dialogRef.current;
     if (!dialog || typeof HTMLDialogElement === "undefined") return;
@@ -157,6 +175,13 @@ export function CartProvider({
 
   const clearCart = useCallback(() => {
     setItems([]);
+    setNotes("");
+    try {
+      window.localStorage.removeItem(STORAGE_KEY);
+      window.localStorage.removeItem(NOTES_STORAGE_KEY);
+    } catch {
+      // Ignore storage errors
+    }
   }, []);
 
   const totalItems = useMemo(
@@ -168,6 +193,15 @@ export function CartProvider({
     () => items.reduce((sum, i) => sum + i.product.price * i.quantity, 0),
     [items],
   );
+
+  const deliveryFee = useMemo(() => {
+    if (items.length === 0) return 0;
+    return subtotal >= SHIPPING_CONFIG.freeShippingThreshold
+      ? 0
+      : SHIPPING_CONFIG.standardWhiteGloveFee;
+  }, [items.length, subtotal]);
+
+  const total = subtotal + deliveryFee;
 
   const orderMessage = useMemo(() => {
     const lines = [
@@ -193,6 +227,10 @@ export function CartProvider({
       items,
       totalItems,
       subtotal,
+      deliveryFee,
+      total,
+      notes,
+      setNotes,
       addItem,
       removeItem,
       updateQuantity,
@@ -204,6 +242,9 @@ export function CartProvider({
       items,
       totalItems,
       subtotal,
+      deliveryFee,
+      total,
+      notes,
       addItem,
       removeItem,
       updateQuantity,
@@ -253,7 +294,8 @@ export function CartProvider({
               </div>
               <h3 className="mt-5 text-2xl font-medium">Your bag is empty</h3>
               <p className="mt-2 max-w-xs text-sm text-ink/65">
-                Explore our collectible furniture, lighting, and architectural objects crafted in our atelier.
+                Explore our collectible furniture, lighting, and architectural
+                objects crafted in our atelier.
               </p>
               <Link
                 href="/store"
@@ -274,7 +316,7 @@ export function CartProvider({
                       className="relative h-24 w-20 shrink-0 overflow-hidden bg-ink/10"
                     >
                       <Image
-                        src={product.image_path}
+                        src={productImageUrl(product.image_path)}
                         alt={product.alt_text}
                         fill
                         loading="lazy"
@@ -302,7 +344,8 @@ export function CartProvider({
                           </button>
                         </div>
                         <p className="mt-1 text-xs text-ink/60">
-                          {formatPrice(product.price)} · {product.lead_time.split("·")[0].trim()}
+                          {formatPrice(product.price)} ·{" "}
+                          {product.lead_time.split("·")[0].trim()}
                         </p>
                       </div>
 
@@ -310,7 +353,9 @@ export function CartProvider({
                         <div className="inline-flex items-center border border-ink/20 bg-ivory-light">
                           <button
                             type="button"
-                            onClick={() => updateQuantity(product.id, quantity - 1)}
+                            onClick={() =>
+                              updateQuantity(product.id, quantity - 1)
+                            }
                             aria-label="Decrease quantity"
                             className="px-2.5 py-1 text-ink/70 hover:text-ink"
                           >
@@ -321,7 +366,9 @@ export function CartProvider({
                           </span>
                           <button
                             type="button"
-                            onClick={() => updateQuantity(product.id, quantity + 1)}
+                            onClick={() =>
+                              updateQuantity(product.id, quantity + 1)
+                            }
                             aria-label="Increase quantity"
                             className="px-2.5 py-1 text-ink/70 hover:text-ink"
                           >
@@ -346,7 +393,7 @@ export function CartProvider({
                   rows={2}
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
-                  placeholder="E.g. custom table length, timber finish preference, or delivery city..."
+                  placeholder="E.g. custom table length, timber finish preference, or delivery instructions..."
                   className="field-input"
                 />
               </div>
@@ -356,36 +403,51 @@ export function CartProvider({
 
         {items.length > 0 && (
           <div className="border-t border-ink/15 bg-ivory-dark/70 px-6 py-5">
-            <div className="flex items-baseline justify-between">
-              <span className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/70">
-                Estimated Subtotal
+            <div className="space-y-1.5 text-xs text-ink/70">
+              <div className="flex justify-between">
+                <span>Subtotal</span>
+                <span>{formatPrice(subtotal)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>White-Glove Delivery</span>
+                <span>
+                  {deliveryFee === 0
+                    ? "Complimentary"
+                    : formatPrice(deliveryFee)}
+                </span>
+              </div>
+            </div>
+
+            <div className="mt-3 flex items-baseline justify-between border-t border-ink/10 pt-3">
+              <span className="text-xs font-semibold uppercase tracking-[0.18em] text-ink/80">
+                Total
               </span>
               <span className="font-display text-2xl font-semibold text-ink">
-                {formatPrice(subtotal)}
+                {formatPrice(total)}
               </span>
             </div>
-            <p className="mt-1 text-xs text-ink/60">
-              White-glove delivery &amp; installation scheduled upon order confirmation.
-            </p>
+
             <div className="mt-4 flex flex-col gap-2.5">
-              {waHref ? (
+              <Link
+                href="/checkout"
+                onClick={closeCart}
+                className="btn-gold w-full"
+              >
+                <Lock className="h-4 w-4" aria-hidden />
+                Proceed to Checkout
+              </Link>
+
+              {waHref && (
                 <a
                   href={waHref}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="btn-gold w-full"
+                  className="btn-outline w-full"
                 >
-                  Complete Order on WhatsApp
+                  Enquire on WhatsApp
                 </a>
-              ) : (
-                <Link
-                  href={`/contact?subject=${encodeURIComponent("Store Order Enquiry")}&summary=${encodeURIComponent(orderMessage)}`}
-                  onClick={closeCart}
-                  className="btn-dark w-full"
-                >
-                  Request Order Invoice &amp; Delivery
-                </Link>
               )}
+
               <button
                 type="button"
                 onClick={clearCart}

@@ -3,6 +3,7 @@ import Link from "next/link";
 import { PageHeader } from "@/components/admin/PageHeader";
 import { StatusBadge } from "@/components/admin/StatusBadge";
 import { requireAdmin } from "@/lib/auth";
+import { dbQuery } from "@/lib/db";
 import { projectImageUrl } from "@/lib/storage";
 import { cn } from "@/lib/utils";
 
@@ -22,23 +23,55 @@ type Row = {
   status: string;
   featured: boolean;
   updated_at: string;
-  category: { name: string } | null;
-  images: { storage_path: string; is_cover: boolean; sort_order: number }[];
+  category_name: string | null;
+};
+
+type ImgRow = {
+  project_id: string;
+  storage_path: string;
+  is_cover: boolean;
+  sort_order: number;
 };
 
 export default async function ProjectsPage({ searchParams }: Props) {
-  const { supabase } = await requireAdmin();
+  await requireAdmin();
   const { status } = await searchParams;
   const filter = FILTERS.some((f) => f.value === status) ? (status ?? "") : "";
 
-  let query = supabase
-    .from("projects")
-    .select("id,title,slug,status,featured,updated_at,category:categories(name),images:project_images(storage_path,is_cover,sort_order)")
-    .order("updated_at", { ascending: false });
-  if (filter) query = query.eq("status", filter);
+  const params: unknown[] = [];
+  let where = "";
+  if (filter) {
+    params.push(filter);
+    where = "WHERE p.status = $1";
+  }
 
-  const { data, error } = await query;
-  const projects = (data ?? []) as unknown as Row[];
+  const { rows: projectRows } = await dbQuery<Row>(
+    `SELECT p.id, p.title, p.slug, p.status, p.featured, p.updated_at, c.name AS category_name
+     FROM projects p
+     LEFT JOIN categories c ON c.id = p.category_id
+     ${where}
+     ORDER BY p.updated_at DESC`,
+    params,
+  );
+
+  const projectIds = projectRows.map((p) => p.id);
+  const { rows: imageRows } =
+    projectIds.length > 0
+      ? await dbQuery<ImgRow>(
+          `SELECT project_id, storage_path, is_cover, sort_order
+           FROM project_images
+           WHERE project_id = ANY($1::uuid[])
+           ORDER BY sort_order ASC`,
+          [projectIds],
+        )
+      : { rows: [] as ImgRow[] };
+
+  const imagesByProject = new Map<string, ImgRow[]>();
+  for (const img of imageRows) {
+    const list = imagesByProject.get(img.project_id) ?? [];
+    list.push(img);
+    imagesByProject.set(img.project_id, list);
+  }
 
   return (
     <>
@@ -56,11 +89,15 @@ export default async function ProjectsPage({ searchParams }: Props) {
         {FILTERS.map((f) => (
           <Link
             key={f.value}
-            href={f.value ? `/admin/projects?status=${f.value}` : "/admin/projects"}
+            href={
+              f.value ? `/admin/projects?status=${f.value}` : "/admin/projects"
+            }
             aria-current={filter === f.value ? "true" : undefined}
             className={cn(
               "border px-4 py-1.5 text-sm",
-              filter === f.value ? "border-ink bg-ink text-ivory" : "border-ink/25 hover:border-ink",
+              filter === f.value
+                ? "border-ink bg-ink text-ivory"
+                : "border-ink/25 hover:border-ink",
             )}
           >
             {f.label}
@@ -68,13 +105,7 @@ export default async function ProjectsPage({ searchParams }: Props) {
         ))}
       </nav>
 
-      {error && (
-        <p role="alert" className="mb-6 border border-red-700/30 bg-red-50 px-4 py-3 text-sm text-red-900">
-          Could not load projects. Please refresh the page.
-        </p>
-      )}
-
-      {projects.length === 0 ? (
+      {projectRows.length === 0 ? (
         <div className="admin-card py-16 text-center">
           <h2 className="text-2xl font-medium">
             {filter ? `No ${filter} projects` : "No projects yet"}
@@ -92,9 +123,9 @@ export default async function ProjectsPage({ searchParams }: Props) {
         </div>
       ) : (
         <ul className="divide-y divide-ink/10 border border-ink/10 bg-white">
-          {projects.map((p) => {
-            const sorted = [...p.images].sort((a, b) => a.sort_order - b.sort_order);
-            const cover = sorted.find((i) => i.is_cover) ?? sorted[0];
+          {projectRows.map((p) => {
+            const imgs = imagesByProject.get(p.id) ?? [];
+            const cover = imgs.find((i) => i.is_cover) ?? imgs[0];
             return (
               <li key={p.id}>
                 <Link
@@ -104,14 +135,18 @@ export default async function ProjectsPage({ searchParams }: Props) {
                   <span className="h-16 w-20 shrink-0 overflow-hidden bg-ink/10">
                     {cover && (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={projectImageUrl(cover.storage_path)} alt="" className="h-full w-full object-cover" />
+                      <img
+                        src={projectImageUrl(cover.storage_path)}
+                        alt=""
+                        className="h-full w-full object-cover"
+                      />
                     )}
                   </span>
                   <span className="min-w-0 flex-1">
                     <span className="block truncate font-medium">{p.title}</span>
                     <span className="block truncate text-sm text-ink/60">
-                      {p.category?.name ?? "Uncategorised"} · {p.images.length} image
-                      {p.images.length === 1 ? "" : "s"}
+                      {p.category_name ?? "Uncategorised"} · {imgs.length} image
+                      {imgs.length === 1 ? "" : "s"}
                       {p.featured && " · Featured"}
                     </span>
                   </span>

@@ -3,7 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { LoginForm } from "@/components/admin/LoginForm";
 import { getAdmin } from "@/lib/auth";
-import { isSupabaseConfigured } from "@/lib/env";
+import { isDatabaseConfigured } from "@/lib/env";
 
 export const metadata: Metadata = { title: "Sign in" };
 export const dynamic = "force-dynamic";
@@ -33,14 +33,21 @@ export default async function LoginPage({ searchParams }: Props) {
             This area is for authorised Wura Interiors administrators only.
           </p>
 
-          {!isSupabaseConfigured && (
-            <p role="alert" className="mt-6 border border-amber-700/30 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-              Supabase is not configured. Copy <code>.env.example</code> to <code>.env.local</code>{" "}
-              and add your project URL and anon key.
+          {!isDatabaseConfigured && (
+            <p
+              role="alert"
+              className="mt-6 border border-amber-700/30 bg-amber-50 px-4 py-3 text-sm text-amber-900"
+            >
+              Neon Postgres is not configured. Copy <code>.env.example</code> to{" "}
+              <code>.env.local</code> and add your <code>DATABASE_URL</code> and{" "}
+              <code>BETTER_AUTH_SECRET</code>.
             </p>
           )}
           {error === "not-authorised" && (
-            <p role="alert" className="mt-6 border border-red-700/30 bg-red-50 px-4 py-3 text-sm text-red-900">
+            <p
+              role="alert"
+              className="mt-6 border border-red-700/30 bg-red-50 px-4 py-3 text-sm text-red-900"
+            >
               Please sign in with an administrator account to continue.
             </p>
           )}

@@ -12,6 +12,7 @@ import {
   type ActionState,
 } from "@/lib/action-helpers";
 import { getAdmin } from "@/lib/auth";
+import { dbQuery } from "@/lib/db";
 import { moveRow } from "@/lib/reorder";
 import { formToObject, serviceSchema, uuidSchema } from "@/lib/validation";
 
@@ -27,18 +28,30 @@ export async function createService(
   const parsed = parseInput(serviceSchema, formToObject(formData));
   if (parsed.error) return parsed.error;
 
-  const { data: last } = await admin.supabase
-    .from("services")
-    .select("sort_order")
-    .order("sort_order", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  try {
+    const { rows: lastRows } = await dbQuery<{ sort_order: number }>(
+      `SELECT sort_order FROM services ORDER BY sort_order DESC LIMIT 1`,
+    );
+    const nextOrder = (lastRows[0]?.sort_order ?? -1) + 1;
 
-  const { error } = await admin.supabase.from("services").insert({
-    ...parsed.data,
-    sort_order: ((last?.sort_order as number | undefined) ?? -1) + 1,
-  });
-  if (error) return dbFailure(error, { uniqueField: "slug", uniqueMessage: SLUG_TAKEN });
+    await dbQuery(
+      `INSERT INTO services (title, slug, summary, description, status, sort_order)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [
+        parsed.data.title,
+        parsed.data.slug,
+        parsed.data.summary,
+        parsed.data.description,
+        parsed.data.status,
+        nextOrder,
+      ],
+    );
+  } catch (err) {
+    return dbFailure(err as { code?: string; message?: string }, {
+      uniqueField: "slug",
+      uniqueMessage: SLUG_TAKEN,
+    });
+  }
 
   revalidatePublic();
   redirect("/admin/services?saved=created");
@@ -57,17 +70,35 @@ export async function updateService(
   const parsed = parseInput(serviceSchema, formToObject(formData));
   if (parsed.error) return parsed.error;
 
-  const { data, error } = await admin.supabase
-    .from("services")
-    .update(parsed.data)
-    .eq("id", id.data)
-    .select("id")
-    .maybeSingle();
-  if (error) return dbFailure(error, { uniqueField: "slug", uniqueMessage: SLUG_TAKEN });
-  if (!data) return fail("Service not found.");
+  try {
+    const { rowCount } = await dbQuery(
+      `UPDATE services
+       SET title = $1,
+           slug = $2,
+           summary = $3,
+           description = $4,
+           status = $5,
+           updated_at = NOW()
+       WHERE id = $6`,
+      [
+        parsed.data.title,
+        parsed.data.slug,
+        parsed.data.summary,
+        parsed.data.description,
+        parsed.data.status,
+        id.data,
+      ],
+    );
+    if (!rowCount) return fail("Service not found.");
 
-  revalidatePublic();
-  return succeed("Service saved.");
+    revalidatePublic();
+    return succeed("Service saved.");
+  } catch (err) {
+    return dbFailure(err as { code?: string; message?: string }, {
+      uniqueField: "slug",
+      uniqueMessage: SLUG_TAKEN,
+    });
+  }
 }
 
 export async function setServiceStatus(
@@ -82,20 +113,24 @@ export async function setServiceStatus(
     return fail("Invalid request.");
   }
 
-  const { data, error } = await admin.supabase
-    .from("services")
-    .update({ status })
-    .eq("id", parsedId.data)
-    .select("id")
-    .maybeSingle();
-  if (error) return dbFailure(error);
-  if (!data) return fail("Service not found.");
+  try {
+    const { rowCount } = await dbQuery(
+      `UPDATE services SET status = $1, updated_at = NOW() WHERE id = $2`,
+      [status, parsedId.data],
+    );
+    if (!rowCount) return fail("Service not found.");
 
-  revalidatePublic();
-  return succeed(status === "published" ? "Service published." : "Service unpublished.");
+    revalidatePublic();
+    return succeed(status === "published" ? "Service published." : "Service unpublished.");
+  } catch (err) {
+    return dbFailure(err as { code?: string; message?: string });
+  }
 }
 
-export async function moveService(id: string, direction: "up" | "down"): Promise<ActionResult> {
+export async function moveService(
+  id: string,
+  direction: "up" | "down",
+): Promise<ActionResult> {
   const admin = await getAdmin();
   if (!admin) return UNAUTHORISED;
 
@@ -104,7 +139,7 @@ export async function moveService(id: string, direction: "up" | "down"): Promise
     return fail("Invalid request.");
   }
 
-  const result = await moveRow(admin.supabase, "services", parsedId.data, direction);
+  const result = await moveRow("services", parsedId.data, direction);
   if (!result.ok) return fail(result.error ?? "Could not reorder services.");
 
   revalidatePublic();
@@ -118,9 +153,11 @@ export async function deleteService(id: string): Promise<ActionResult> {
   const parsedId = uuidSchema.safeParse(id);
   if (!parsedId.success) return fail("Invalid service.");
 
-  const { error } = await admin.supabase.from("services").delete().eq("id", parsedId.data);
-  if (error) return dbFailure(error);
-
-  revalidatePublic();
-  return succeed("Service deleted.");
+  try {
+    await dbQuery(`DELETE FROM services WHERE id = $1`, [parsedId.data]);
+    revalidatePublic();
+    return succeed("Service deleted.");
+  } catch (err) {
+    return dbFailure(err as { code?: string; message?: string });
+  }
 }

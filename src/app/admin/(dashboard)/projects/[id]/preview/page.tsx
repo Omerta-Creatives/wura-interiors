@@ -1,39 +1,67 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ProjectDetail } from "@/components/site/ProjectDetail";
 import { StatusBadge } from "@/components/admin/StatusBadge";
+import { ProjectDetail } from "@/components/site/ProjectDetail";
 import { requireAdmin } from "@/lib/auth";
 import { DEFAULT_SETTINGS } from "@/lib/data";
+import { dbQuery } from "@/lib/db";
 import { uuidSchema } from "@/lib/validation";
-import type { ProjectWithRelations, SiteSettings } from "@/types";
+import type { ProjectImage, ProjectWithRelations, SiteSettings } from "@/types";
 
 type Props = { params: Promise<{ id: string }> };
 
 export const metadata = { title: "Preview project" };
 
-/**
- * Renders the real public project template with draft data. It runs as the
- * signed-in administrator, so row-level security lets it read unpublished work;
- * the public site can never reach this route.
- */
 export default async function PreviewProjectPage({ params }: Props) {
   const { id } = await params;
   if (!uuidSchema.safeParse(id).success) notFound();
 
-  const { supabase } = await requireAdmin();
+  await requireAdmin();
 
-  const [{ data: project }, { data: settings }] = await Promise.all([
-    supabase
-      .from("projects")
-      .select("*, category:categories(name,slug), images:project_images(*)")
-      .eq("id", id)
-      .maybeSingle(),
-    supabase.from("site_settings").select("*").eq("id", 1).maybeSingle(),
-  ]);
-  if (!project) notFound();
+  const [{ rows: projectRows }, { rows: imageRows }, { rows: settingsRows }] =
+    await Promise.all([
+      dbQuery<Record<string, unknown>>(
+        `SELECT p.*, c.name AS category_name, c.slug AS category_slug
+         FROM projects p
+         LEFT JOIN categories c ON c.id = p.category_id
+         WHERE p.id = $1
+         LIMIT 1`,
+        [id],
+      ),
+      dbQuery<ProjectImage>(
+        `SELECT * FROM project_images WHERE project_id = $1 ORDER BY sort_order ASC`,
+        [id],
+      ),
+      dbQuery<Partial<SiteSettings>>(
+        `SELECT * FROM site_settings WHERE id = 1 LIMIT 1`,
+      ),
+    ]);
 
-  const typed = project as unknown as ProjectWithRelations;
-  typed.images = [...typed.images].sort((a, b) => a.sort_order - b.sort_order);
+  const raw = projectRows[0];
+  if (!raw) notFound();
+
+  const typed: ProjectWithRelations = {
+    id: String(raw.id),
+    title: String(raw.title),
+    slug: String(raw.slug),
+    summary: (raw.summary as string | null) ?? null,
+    description: (raw.description as string | null) ?? null,
+    category_id: (raw.category_id as string | null) ?? null,
+    location: (raw.location as string | null) ?? null,
+    completed_on: raw.completed_on ? String(raw.completed_on).slice(0, 10) : null,
+    featured: Boolean(raw.featured),
+    status: (raw.status as ProjectWithRelations["status"]) ?? "draft",
+    published_at: raw.published_at
+      ? new Date(String(raw.published_at)).toISOString()
+      : null,
+    created_at: new Date(String(raw.created_at ?? Date.now())).toISOString(),
+    updated_at: new Date(String(raw.updated_at ?? Date.now())).toISOString(),
+    category:
+      raw.category_name && raw.category_slug
+        ? { name: String(raw.category_name), slug: String(raw.category_slug) }
+        : null,
+    images: imageRows,
+  };
 
   return (
     <div className="-mx-5 -my-8 sm:-mx-8 lg:-mx-12">
@@ -42,12 +70,18 @@ export default async function PreviewProjectPage({ params }: Props) {
           <strong>Preview</strong> <StatusBadge status={typed.status} />
           <span>This is how the project page will look to visitors.</span>
         </p>
-        <Link href={`/admin/projects/${typed.id}`} className="underline underline-offset-4">
+        <Link
+          href={`/admin/projects/${typed.id}`}
+          className="underline underline-offset-4"
+        >
           Back to editor
         </Link>
       </div>
       <div className="bg-ivory">
-        <ProjectDetail project={typed} settings={{ ...DEFAULT_SETTINGS, ...(settings as Partial<SiteSettings>) }} />
+        <ProjectDetail
+          project={typed}
+          settings={{ ...DEFAULT_SETTINGS, ...(settingsRows[0] ?? {}) }}
+        />
       </div>
     </div>
   );

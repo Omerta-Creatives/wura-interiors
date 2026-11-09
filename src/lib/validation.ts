@@ -101,6 +101,58 @@ export const serviceSchema = z.object({
   status: z.enum(["draft", "published"]),
 });
 
+export const storeCategoryEnum = z.enum([
+  "Seating",
+  "Dining",
+  "Tables",
+  "Storage",
+  "Lighting",
+  "Objects & Decor",
+]);
+
+export const productSchema = z.object({
+  name: requiredText(2, 140, "Product name"),
+  slug: slugSchema,
+  category: storeCategoryEnum,
+  price: z.coerce
+    .number({ invalid_type_error: "Enter a valid price in Naira" })
+    .int("Price must be a whole number")
+    .min(1000, "Price must be at least ₦1,000")
+    .max(500_000_000, "Price is too large"),
+  summary: requiredText(10, 350, "Summary"),
+  description: requiredText(10, 10000, "Description"),
+  dimensions: requiredText(2, 240, "Dimensions"),
+  materials: requiredText(2, 300, "Materials"),
+  finish: requiredText(2, 240, "Finish"),
+  lead_time: requiredText(2, 140, "Lead time"),
+  availability: z.enum(["in_stock", "made_to_order"]),
+  stock_quantity: z.coerce
+    .number({ invalid_type_error: "Enter a valid stock count" })
+    .int()
+    .min(0, "Stock cannot be negative")
+    .max(10000),
+  featured: z.boolean(),
+  status: z.enum(["draft", "published", "archived"]),
+  image_path: requiredText(2, 500, "Primary image URL or path"),
+  alt_text: requiredText(2, 250, "Image alt text"),
+});
+
+export const checkoutItemSchema = z.object({
+  productId: z.string().min(1),
+  quantity: z.number().int().min(1).max(50),
+});
+
+export const checkoutSchema = z.object({
+  customer_name: requiredText(2, 120, "Full name"),
+  customer_email: z.string().trim().email("Enter a valid email address").max(200),
+  customer_phone: requiredText(7, 40, "Phone number"),
+  shipping_address: requiredText(5, 300, "Delivery street address"),
+  shipping_city: requiredText(2, 100, "City"),
+  shipping_state: requiredText(2, 100, "State"),
+  notes: optionalText(1500, "Delivery notes"),
+  items_json: z.string().min(2, "Your shopping bag is empty"),
+});
+
 export const settingsSchema = z.object({
   business_name: requiredText(2, 100, "Business name"),
   tagline: optionalText(160, "Tagline"),
@@ -127,7 +179,32 @@ export const signInSchema = z.object({
   password: z.string().min(1, "Enter your password"),
 });
 
+export const signUpSchema = z.object({
+  name: requiredText(2, 100, "Full name"),
+  email: z.string().trim().email("Enter a valid email address"),
+  phone: optionalText(40, "Phone number"),
+  password: z
+    .string()
+    .min(8, "Password must be at least 8 characters")
+    .max(128, "Password must be 128 characters or fewer"),
+});
+
 export const projectStatusSchema = z.enum(["draft", "published", "archived"]);
+export const productStatusSchema = z.enum(["draft", "published", "archived"]);
+export const orderStatusSchema = z.enum([
+  "pending",
+  "confirmed",
+  "in_production",
+  "out_for_delivery",
+  "delivered",
+  "cancelled",
+]);
+export const paymentStatusSchema = z.enum([
+  "pending",
+  "paid",
+  "failed",
+  "refunded",
+]);
 
 /** Read checkbox + text inputs off a FormData into a plain object. */
 export function formToObject(fd: FormData, checkboxes: string[] = []) {

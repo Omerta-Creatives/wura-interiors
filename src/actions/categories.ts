@@ -11,6 +11,7 @@ import {
   type ActionState,
 } from "@/lib/action-helpers";
 import { getAdmin } from "@/lib/auth";
+import { dbQuery } from "@/lib/db";
 import { moveRow } from "@/lib/reorder";
 import { slugify } from "@/lib/utils";
 import { categorySchema, formToObject, uuidSchema } from "@/lib/validation";
@@ -30,20 +31,25 @@ export async function createCategory(
   const parsed = parseInput(categorySchema, raw);
   if (parsed.error) return parsed.error;
 
-  const { data: last } = await admin.supabase
-    .from("categories")
-    .select("sort_order")
-    .order("sort_order", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+  try {
+    const { rows: lastRows } = await dbQuery<{ sort_order: number }>(
+      `SELECT sort_order FROM categories ORDER BY sort_order DESC LIMIT 1`,
+    );
+    const nextOrder = (lastRows[0]?.sort_order ?? -1) + 1;
 
-  const { error } = await admin.supabase
-    .from("categories")
-    .insert({ ...parsed.data, sort_order: ((last?.sort_order as number | undefined) ?? -1) + 1 });
-  if (error) return dbFailure(error, { uniqueField: "slug", uniqueMessage: SLUG_TAKEN });
+    await dbQuery(
+      `INSERT INTO categories (name, slug, sort_order) VALUES ($1, $2, $3)`,
+      [parsed.data.name, parsed.data.slug, nextOrder],
+    );
 
-  revalidatePublic();
-  return succeed(`Category “${parsed.data.name}” added.`);
+    revalidatePublic();
+    return succeed(`Category “${parsed.data.name}” added.`);
+  } catch (err) {
+    return dbFailure(err as { code?: string; message?: string }, {
+      uniqueField: "slug",
+      uniqueMessage: SLUG_TAKEN,
+    });
+  }
 }
 
 export async function updateCategory(
@@ -59,20 +65,27 @@ export async function updateCategory(
   const parsed = parseInput(categorySchema, formToObject(formData));
   if (parsed.error) return parsed.error;
 
-  const { data, error } = await admin.supabase
-    .from("categories")
-    .update(parsed.data)
-    .eq("id", id.data)
-    .select("id")
-    .maybeSingle();
-  if (error) return dbFailure(error, { uniqueField: "slug", uniqueMessage: SLUG_TAKEN });
-  if (!data) return fail("Category not found.");
+  try {
+    const { rowCount } = await dbQuery(
+      `UPDATE categories SET name = $1, slug = $2 WHERE id = $3`,
+      [parsed.data.name, parsed.data.slug, id.data],
+    );
+    if (!rowCount) return fail("Category not found.");
 
-  revalidatePublic();
-  return succeed("Category saved.");
+    revalidatePublic();
+    return succeed("Category saved.");
+  } catch (err) {
+    return dbFailure(err as { code?: string; message?: string }, {
+      uniqueField: "slug",
+      uniqueMessage: SLUG_TAKEN,
+    });
+  }
 }
 
-export async function moveCategory(id: string, direction: "up" | "down"): Promise<ActionResult> {
+export async function moveCategory(
+  id: string,
+  direction: "up" | "down",
+): Promise<ActionResult> {
   const admin = await getAdmin();
   if (!admin) return UNAUTHORISED;
 
@@ -81,7 +94,7 @@ export async function moveCategory(id: string, direction: "up" | "down"): Promis
     return fail("Invalid request.");
   }
 
-  const result = await moveRow(admin.supabase, "categories", parsedId.data, direction);
+  const result = await moveRow("categories", parsedId.data, direction);
   if (!result.ok) return fail(result.error ?? "Could not reorder categories.");
 
   revalidatePublic();
@@ -95,10 +108,11 @@ export async function deleteCategory(id: string): Promise<ActionResult> {
   const parsedId = uuidSchema.safeParse(id);
   if (!parsedId.success) return fail("Invalid category.");
 
-  // Projects in this category are kept and become uncategorised (ON DELETE SET NULL).
-  const { error } = await admin.supabase.from("categories").delete().eq("id", parsedId.data);
-  if (error) return dbFailure(error);
-
-  revalidatePublic();
-  return succeed("Category deleted. Its projects are now uncategorised.");
+  try {
+    await dbQuery(`DELETE FROM categories WHERE id = $1`, [parsedId.data]);
+    revalidatePublic();
+    return succeed("Category deleted. Its projects are now uncategorised.");
+  } catch (err) {
+    return dbFailure(err as { code?: string; message?: string });
+  }
 }

@@ -1,22 +1,22 @@
 import { CategoryManager } from "@/components/admin/CategoryManager";
 import { PageHeader } from "@/components/admin/PageHeader";
 import { requireAdmin } from "@/lib/auth";
+import { dbQuery } from "@/lib/db";
 import type { Category } from "@/types";
 
 export const metadata = { title: "Categories" };
 
 export default async function CategoriesPage() {
-  const { supabase } = await requireAdmin();
+  await requireAdmin();
 
-  const [{ data: categories }, { data: projects }] = await Promise.all([
-    supabase.from("categories").select("*").order("sort_order").order("name"),
-    supabase.from("projects").select("category_id"),
+  const [{ rows: categories }, { rows: projects }] = await Promise.all([
+    dbQuery<Category>(`SELECT * FROM categories ORDER BY sort_order ASC, name ASC`),
+    dbQuery<{ category_id: string | null }>(`SELECT category_id FROM projects`),
   ]);
 
   const usage: Record<string, number> = {};
-  for (const p of projects ?? []) {
-    const id = p.category_id as string | null;
-    if (id) usage[id] = (usage[id] ?? 0) + 1;
+  for (const p of projects) {
+    if (p.category_id) usage[p.category_id] = (usage[p.category_id] ?? 0) + 1;
   }
 
   return (
@@ -25,7 +25,7 @@ export default async function CategoriesPage() {
         title="Categories"
         description="Organise the portfolio. Categories are managed here — none are hard-coded."
       />
-      <CategoryManager categories={(categories ?? []) as Category[]} usage={usage} />
+      <CategoryManager categories={categories} usage={usage} />
     </>
   );
 }

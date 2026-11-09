@@ -5,17 +5,20 @@ import { useRef, useState } from "react";
 import { setLogo } from "@/actions/settings";
 import { ConfirmButton } from "@/components/ui/ConfirmButton";
 import { Notice } from "@/components/ui/Notice";
-import { BUCKETS, IMAGE_LIMITS } from "@/lib/env";
+import { IMAGE_LIMITS } from "@/lib/env";
 import { brandAssetUrl } from "@/lib/storage";
-import { createClient } from "@/lib/supabase/client";
 import { useRunAction } from "./hooks";
 
-const EXTENSIONS: Record<string, string> = {
-  "image/png": "png",
-  "image/jpeg": "jpg",
-  "image/webp": "webp",
-  "image/svg+xml": "svg",
-};
+const ALLOWED_TYPES = new Set<string>(IMAGE_LIMITS.logoTypes);
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read file."));
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.readAsDataURL(file);
+  });
+}
 
 export function LogoUploader({ logoPath }: { logoPath: string | null }) {
   const { run, pending, notice } = useRunAction();
@@ -27,7 +30,7 @@ export function LogoUploader({ logoPath }: { logoPath: string | null }) {
     if (!file) return;
     setError(null);
 
-    if (!(file.type in EXTENSIONS)) {
+    if (!ALLOWED_TYPES.has(file.type)) {
       setError("Unsupported format. Use PNG, JPEG, WebP or SVG.");
       return;
     }
@@ -37,17 +40,14 @@ export function LogoUploader({ logoPath }: { logoPath: string | null }) {
     }
 
     setUploading(true);
-    const path = `logo/${crypto.randomUUID()}.${EXTENSIONS[file.type]}`;
-    const { error: uploadError } = await createClient()
-      .storage.from(BUCKETS.brand)
-      .upload(path, file, { contentType: file.type, cacheControl: "31536000", upsert: false });
-    setUploading(false);
-
-    if (uploadError) {
-      setError(`Upload failed: ${uploadError.message}`);
-      return;
+    try {
+      const dataUrl = await fileToDataUrl(file);
+      setUploading(false);
+      run(() => setLogo(dataUrl));
+    } catch {
+      setUploading(false);
+      setError("Could not process logo file.");
     }
-    run(() => setLogo(path));
     if (inputRef.current) inputRef.current.value = "";
   }
 
@@ -58,17 +58,24 @@ export function LogoUploader({ logoPath }: { logoPath: string | null }) {
           Logo
         </h2>
         <p className="mt-1 text-sm text-ink/70">
-          Until the official logo is uploaded, the website shows a text placeholder. A transparent
-          PNG or an SVG works best on the black header. Maximum 2 MB.
+          Until the official logo is uploaded, the website shows a text
+          placeholder. A transparent PNG or an SVG works best on the black
+          header. Maximum 2 MB.
         </p>
       </div>
 
       <div className="flex flex-wrap items-center gap-6">
         <div className="flex h-24 w-56 items-center justify-center bg-ink p-4">
           {logoPath ? (
-            <img src={brandAssetUrl(logoPath)} alt="Current logo" className="max-h-full max-w-full object-contain" />
+            <img
+              src={brandAssetUrl(logoPath)}
+              alt="Current logo"
+              className="max-h-full max-w-full object-contain"
+            />
           ) : (
-            <span className="text-center font-display text-xl uppercase tracking-[0.3em] text-gold">Wura</span>
+            <span className="text-center font-display text-xl uppercase tracking-[0.3em] text-gold">
+              Wura
+            </span>
           )}
         </div>
 
@@ -77,7 +84,11 @@ export function LogoUploader({ logoPath }: { logoPath: string | null }) {
             htmlFor="logo-upload"
             className={`btn-dark cursor-pointer ${uploading || pending ? "pointer-events-none opacity-60" : ""}`}
           >
-            {uploading ? "Uploading…" : logoPath ? "Replace logo" : "Upload logo"}
+            {uploading
+              ? "Uploading…"
+              : logoPath
+                ? "Replace logo"
+                : "Upload logo"}
           </label>
           <input
             ref={inputRef}

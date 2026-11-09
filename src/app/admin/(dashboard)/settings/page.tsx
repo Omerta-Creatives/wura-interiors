@@ -3,14 +3,17 @@ import { PageHeader } from "@/components/admin/PageHeader";
 import { SettingsForm } from "@/components/admin/SettingsForm";
 import { requireAdmin } from "@/lib/auth";
 import { DEFAULT_SETTINGS } from "@/lib/data";
+import { dbQuery } from "@/lib/db";
 import type { SiteSettings } from "@/types";
 
 export const metadata = { title: "Settings" };
 
 export default async function SettingsPage() {
-  const { supabase } = await requireAdmin();
-  const { data } = await supabase.from("site_settings").select("*").eq("id", 1).maybeSingle();
-  const settings: SiteSettings = { ...DEFAULT_SETTINGS, ...(data as Partial<SiteSettings> | null) };
+  await requireAdmin();
+  const { rows } = await dbQuery<Partial<SiteSettings>>(
+    `SELECT * FROM site_settings WHERE id = 1 LIMIT 1`,
+  );
+  const settings: SiteSettings = { ...DEFAULT_SETTINGS, ...(rows[0] ?? {}) };
 
   return (
     <>

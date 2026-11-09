@@ -70,24 +70,22 @@ export function ProjectDetail({
         </div>
       </header>
 
-      {cover && (
-        <div className="container-page -mt-8">
-          <figure className="editorial-frame relative aspect-[16/10] w-full border border-gold/30">
-            <Image
-              src={projectImageUrl(cover.storage_path)}
-              alt={cover.alt_text ?? cover.caption ?? project.title}
-              fill
-              priority
-              fetchPriority="high"
-              sizes="(min-width: 1280px) 1216px, 100vw"
-              className="object-cover"
-            />
-          </figure>
-          {cover.caption && (
-            <p className="mt-3 text-xs tracking-wide text-ink/60">{cover.caption}</p>
-          )}
-        </div>
-      )}
+      <div className="container-page -mt-8">
+        <figure className="editorial-frame relative aspect-[16/10] w-full border border-gold/30">
+          <Image
+            src={projectImageUrl(cover?.storage_path)}
+            alt={cover?.alt_text ?? cover?.caption ?? project.title}
+            fill
+            priority
+            fetchPriority="high"
+            sizes="(min-width: 1280px) 1216px, 100vw"
+            className="object-cover"
+          />
+        </figure>
+        {cover?.caption && (
+          <p className="mt-3 text-xs tracking-wide text-ink/60">{cover.caption}</p>
+        )}
+      </div>
 
       {project.description && (
         <section className="container-page py-16 lg:py-24">

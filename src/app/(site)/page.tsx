@@ -55,13 +55,14 @@ export default async function HomePage() {
     .slice(0, 6);
   const featuredProducts = products.filter((p) => p.featured).slice(0, 3);
   const heroCover = featured[0] ? coverImage(featured[0]) : null;
+  const resolvedHeroCover = heroCover ? projectImageUrl(heroCover.storage_path) : null;
   const heroSrc =
-    heroCover && !heroCover.storage_path.startsWith("/images/portfolio/")
-      ? projectImageUrl(heroCover.storage_path)
+    resolvedHeroCover && !resolvedHeroCover.startsWith("/images/portfolio/")
+      ? resolvedHeroCover
       : SITE_IMAGES.hero;
   const heroAlt =
-    heroCover && !heroCover.storage_path.startsWith("/images/portfolio/")
-      ? (heroCover.alt_text ?? `${settings.business_name} featured interior`)
+    resolvedHeroCover && !resolvedHeroCover.startsWith("/images/portfolio/")
+      ? (heroCover?.alt_text ?? `${settings.business_name} featured interior`)
       : "Sunlit contemporary living space with bespoke walnut furniture, brass details, and travertine stone";
   const enquiry = `Hello ${settings.business_name}, I would like to make an enquiry.`;
 

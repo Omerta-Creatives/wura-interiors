@@ -22,18 +22,16 @@ export function ProjectCard({
       className="group flex flex-col border border-ink/10 bg-ivory-light/90 transition-all duration-500 hover:border-gold/60 hover:shadow-[0_22px_50px_-22px_rgba(17,17,17,0.22)]"
     >
       <div className="relative aspect-[4/5] overflow-hidden bg-ink/10">
-        {cover && (
-          <Image
-            src={projectImageUrl(cover.storage_path)}
-            alt={cover.alt_text ?? project.title}
-            fill
-            priority={priority}
-            fetchPriority={priority ? "high" : undefined}
-            loading={priority ? undefined : "lazy"}
-            sizes="(min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw"
-            className="object-cover transition-transform duration-700 ease-out group-hover:scale-105"
-          />
-        )}
+        <Image
+          src={projectImageUrl(cover?.storage_path)}
+          alt={cover?.alt_text ?? project.title}
+          fill
+          priority={priority}
+          fetchPriority={priority ? "high" : undefined}
+          loading={priority ? undefined : "lazy"}
+          sizes="(min-width: 1024px) 33vw, (min-width: 640px) 50vw, 100vw"
+          className="object-cover transition-transform duration-700 ease-out group-hover:scale-105"
+        />
         <span
           aria-hidden
           className="pointer-events-none absolute inset-0 border border-gold/0 transition-all duration-500 group-hover:border-gold/80 group-hover:[inset:14px]"

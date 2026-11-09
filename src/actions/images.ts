@@ -11,24 +11,16 @@ import {
   type ActionResult,
 } from "@/lib/action-helpers";
 import { getAdmin } from "@/lib/auth";
-import { BUCKETS } from "@/lib/env";
+import { dbQuery } from "@/lib/db";
 import { moveRow } from "@/lib/reorder";
 import { imageDetailsSchema, uuidSchema } from "@/lib/validation";
 
-const UUID = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
-
 const uploadedImageSchema = z.object({
-  path: z.string().max(200),
+  path: z.string().min(2).max(2_000_000),
   width: z.number().int().positive().max(20000).nullable(),
   height: z.number().int().positive().max(20000).nullable(),
 });
 
-/**
- * Called after the browser has uploaded files straight to the storage bucket
- * (storage policies already restrict that to administrators). Registers the
- * files against the project. Paths are validated so a project can only claim
- * files that live under its own folder.
- */
 export async function addProjectImages(
   projectId: string,
   uploads: { path: string; width: number | null; height: number | null }[],
@@ -40,40 +32,54 @@ export async function addProjectImages(
   const items = z.array(uploadedImageSchema).min(1).max(40).safeParse(uploads);
   if (!id.success || !items.success) return fail("Invalid upload.");
 
-  const pathPattern = new RegExp(`^projects/${id.data}/${UUID}\\.(jpg|jpeg|png|webp|avif)$`);
-  if (!items.data.every((i) => pathPattern.test(i.path))) return fail("Invalid file path.");
-
-  const { supabase } = admin;
-
-  const { data: project } = await supabase.from("projects").select("id").eq("id", id.data).maybeSingle();
-  if (!project) return fail("Project not found.");
-
-  const { data: existing } = await supabase
-    .from("project_images")
-    .select("sort_order,is_cover")
-    .eq("project_id", id.data);
-
-  const maxOrder = (existing ?? []).reduce((m, r) => Math.max(m, r.sort_order as number), -1);
-  const hasCover = (existing ?? []).some((r) => r.is_cover);
-
-  const rows = items.data.map((item, index) => ({
-    project_id: id.data,
-    storage_path: item.path,
-    width: item.width,
-    height: item.height,
-    sort_order: maxOrder + 1 + index,
-    is_cover: !hasCover && index === 0,
-  }));
-
-  const { error } = await supabase.from("project_images").insert(rows);
-  if (error) {
-    // Don't leave orphaned files behind.
-    await supabase.storage.from(BUCKETS.projects).remove(items.data.map((i) => i.path));
-    return dbFailure(error);
+  const validPath = (p: string) =>
+    p.startsWith("/images/") ||
+    p.startsWith("https://") ||
+    p.startsWith("data:image/");
+  if (!items.data.every((i) => validPath(i.path))) {
+    return fail("Invalid image path or format.");
   }
 
-  revalidatePublic();
-  return succeed(`${rows.length} image${rows.length === 1 ? "" : "s"} added.`);
+  try {
+    const { rows: projectRows } = await dbQuery<{ id: string }>(
+      `SELECT id FROM projects WHERE id = $1 LIMIT 1`,
+      [id.data],
+    );
+    if (!projectRows[0]) return fail("Project not found.");
+
+    const { rows: existing } = await dbQuery<{
+      sort_order: number;
+      is_cover: boolean;
+    }>(`SELECT sort_order, is_cover FROM project_images WHERE project_id = $1`, [
+      id.data,
+    ]);
+
+    const maxOrder = existing.reduce((m, r) => Math.max(m, r.sort_order), -1);
+    const hasCover = existing.some((r) => r.is_cover);
+
+    for (let index = 0; index < items.data.length; index++) {
+      const item = items.data[index];
+      await dbQuery(
+        `INSERT INTO project_images (project_id, storage_path, width, height, sort_order, is_cover)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          id.data,
+          item.path,
+          item.width,
+          item.height,
+          maxOrder + 1 + index,
+          !hasCover && index === 0,
+        ],
+      );
+    }
+
+    revalidatePublic();
+    return succeed(
+      `${items.data.length} image${items.data.length === 1 ? "" : "s"} added.`,
+    );
+  } catch (err) {
+    return dbFailure(err as { code?: string; message?: string });
+  }
 }
 
 export async function updateImageDetails(
@@ -89,18 +95,18 @@ export async function updateImageDetails(
   const parsed = parseInput(imageDetailsSchema, details);
   if (parsed.error) return parsed.error;
 
-  const { data, error } = await admin.supabase
-    .from("project_images")
-    .update(parsed.data)
-    .eq("id", id.data)
-    .select("id")
-    .maybeSingle();
+  try {
+    const { rowCount } = await dbQuery(
+      `UPDATE project_images SET caption = $1, alt_text = $2 WHERE id = $3`,
+      [parsed.data.caption, parsed.data.alt_text, id.data],
+    );
+    if (!rowCount) return fail("Image not found.");
 
-  if (error) return dbFailure(error);
-  if (!data) return fail("Image not found.");
-
-  revalidatePublic();
-  return succeed("Image details saved.");
+    revalidatePublic();
+    return succeed("Image details saved.");
+  } catch (err) {
+    return dbFailure(err as { code?: string; message?: string });
+  }
 }
 
 export async function moveImage(
@@ -117,7 +123,7 @@ export async function moveImage(
     return fail("Invalid request.");
   }
 
-  const result = await moveRow(admin.supabase, "project_images", iid.data, direction, {
+  const result = await moveRow("project_images", iid.data, direction, {
     column: "project_id",
     value: pid.data,
   });
@@ -127,7 +133,10 @@ export async function moveImage(
   return succeed();
 }
 
-export async function setCoverImage(projectId: string, imageId: string): Promise<ActionResult> {
+export async function setCoverImage(
+  projectId: string,
+  imageId: string,
+): Promise<ActionResult> {
   const admin = await getAdmin();
   if (!admin) return UNAUTHORISED;
 
@@ -135,31 +144,26 @@ export async function setCoverImage(projectId: string, imageId: string): Promise
   const iid = uuidSchema.safeParse(imageId);
   if (!pid.success || !iid.success) return fail("Invalid request.");
 
-  const { supabase } = admin;
+  try {
+    const { rows } = await dbQuery<{ id: string }>(
+      `SELECT id FROM project_images WHERE id = $1 AND project_id = $2 LIMIT 1`,
+      [iid.data, pid.data],
+    );
+    if (!rows[0]) return fail("Image not found.");
 
-  const { data: image } = await supabase
-    .from("project_images")
-    .select("id")
-    .eq("id", iid.data)
-    .eq("project_id", pid.data)
-    .maybeSingle();
-  if (!image) return fail("Image not found.");
+    await dbQuery(
+      `UPDATE project_images SET is_cover = false WHERE project_id = $1 AND is_cover = true`,
+      [pid.data],
+    );
+    await dbQuery(`UPDATE project_images SET is_cover = true WHERE id = $1`, [
+      iid.data,
+    ]);
 
-  const cleared = await supabase
-    .from("project_images")
-    .update({ is_cover: false })
-    .eq("project_id", pid.data)
-    .eq("is_cover", true);
-  if (cleared.error) return dbFailure(cleared.error);
-
-  const { error } = await supabase
-    .from("project_images")
-    .update({ is_cover: true })
-    .eq("id", iid.data);
-  if (error) return dbFailure(error);
-
-  revalidatePublic();
-  return succeed("Cover image updated.");
+    revalidatePublic();
+    return succeed("Cover image updated.");
+  } catch (err) {
+    return dbFailure(err as { code?: string; message?: string });
+  }
 }
 
 export async function deleteImage(imageId: string): Promise<ActionResult> {
@@ -169,45 +173,47 @@ export async function deleteImage(imageId: string): Promise<ActionResult> {
   const iid = uuidSchema.safeParse(imageId);
   if (!iid.success) return fail("Invalid image.");
 
-  const { supabase } = admin;
+  try {
+    const { rows: imageRows } = await dbQuery<{
+      id: string;
+      project_id: string;
+      is_cover: boolean;
+    }>(
+      `SELECT id, project_id, is_cover FROM project_images WHERE id = $1 LIMIT 1`,
+      [iid.data],
+    );
+    const image = imageRows[0];
+    if (!image) return fail("Image not found.");
 
-  const { data: image } = await supabase
-    .from("project_images")
-    .select("id,project_id,storage_path,is_cover")
-    .eq("id", iid.data)
-    .maybeSingle();
-  if (!image) return fail("Image not found.");
+    const { rows: siblings } = await dbQuery<{ id: string }>(
+      `SELECT id FROM project_images WHERE project_id = $1 ORDER BY sort_order ASC`,
+      [image.project_id],
+    );
+    const remaining = siblings.filter((s) => s.id !== image.id);
 
-  const { data: siblings } = await supabase
-    .from("project_images")
-    .select("id")
-    .eq("project_id", image.project_id)
-    .order("sort_order");
-  const remaining = (siblings ?? []).filter((s) => s.id !== image.id);
-
-  if (remaining.length === 0) {
-    const { data: project } = await supabase
-      .from("projects")
-      .select("status")
-      .eq("id", image.project_id)
-      .maybeSingle();
-    if (project?.status === "published") {
-      return fail("A published project needs at least one image. Unpublish it before removing the last image.");
+    if (remaining.length === 0) {
+      const { rows: projRows } = await dbQuery<{ status: string }>(
+        `SELECT status FROM projects WHERE id = $1 LIMIT 1`,
+        [image.project_id],
+      );
+      if (projRows[0]?.status === "published") {
+        return fail(
+          "A published project needs at least one image. Unpublish it before removing the last image.",
+        );
+      }
     }
+
+    await dbQuery(`DELETE FROM project_images WHERE id = $1`, [image.id]);
+
+    if (image.is_cover && remaining.length > 0) {
+      await dbQuery(`UPDATE project_images SET is_cover = true WHERE id = $1`, [
+        remaining[0].id,
+      ]);
+    }
+
+    revalidatePublic();
+    return succeed("Image deleted.");
+  } catch (err) {
+    return dbFailure(err as { code?: string; message?: string });
   }
-
-  const { error } = await supabase.from("project_images").delete().eq("id", image.id);
-  if (error) return dbFailure(error);
-
-  const { error: storageError } = await supabase.storage
-    .from(BUCKETS.projects)
-    .remove([image.storage_path as string]);
-  if (storageError) console.error("[images] storage cleanup failed:", storageError.message);
-
-  if (image.is_cover && remaining.length > 0) {
-    await supabase.from("project_images").update({ is_cover: true }).eq("id", remaining[0].id);
-  }
-
-  revalidatePublic();
-  return succeed("Image deleted.");
 }

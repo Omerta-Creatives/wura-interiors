@@ -12,6 +12,7 @@ import {
   getStoreProductBySlug,
   getStoreProducts,
 } from "@/lib/data";
+import { productImageUrl } from "@/lib/storage";
 import { formatPrice, truncate } from "@/lib/utils";
 
 export const revalidate = 60;
@@ -34,7 +35,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
       title: product.name,
       description,
       url: `/store/${product.slug}`,
-      images: [{ url: product.image_path, alt: product.alt_text }],
+      images: [{ url: productImageUrl(product.image_path), alt: product.alt_text }],
     },
   };
 }
@@ -88,7 +89,7 @@ export default async function StoreProductPage({ params }: Props) {
           <div className="space-y-6 lg:col-span-7">
             <div className="editorial-frame relative aspect-[4/5] w-full">
               <Image
-                src={product.image_path}
+                src={productImageUrl(product.image_path)}
                 alt={product.alt_text}
                 fill
                 priority
@@ -113,7 +114,7 @@ export default async function StoreProductPage({ params }: Props) {
                   <figure key={item.path} className="space-y-2">
                     <div className="relative aspect-[4/3] overflow-hidden border border-ink/10 bg-ink/10">
                       <Image
-                        src={item.path}
+                        src={productImageUrl(item.path)}
                         alt={item.alt}
                         fill
                         loading="lazy"

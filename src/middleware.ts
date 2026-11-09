@@ -1,35 +1,40 @@
+import { getSessionCookie } from "better-auth/cookies";
 import { NextResponse, type NextRequest } from "next/server";
-import { isSupabaseConfigured } from "@/lib/env";
-import { updateSession } from "@/lib/supabase/middleware";
 
 /**
- * First line of defence for /admin: unauthenticated visitors are redirected to
- * the sign-in page. This is NOT the only check — the admin layout, every
- * server action and the database's row-level security each verify the
- * administrator again.
+ * Fast Edge-compatible session cookie check for /admin and /account routes.
+ * Real session + role verification is enforced in server layouts, pages, and
+ * Server Actions via getSessionUser() / requireAdmin().
  */
-export async function middleware(request: NextRequest) {
+export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  const isLogin = pathname === "/admin/login";
+  const sessionCookie = getSessionCookie(request);
 
-  if (!isSupabaseConfigured) {
-    if (isLogin) return NextResponse.next();
-    return NextResponse.redirect(new URL("/admin/login", request.url));
+  if (pathname.startsWith("/admin")) {
+    const isLogin = pathname === "/admin/login";
+    if (!sessionCookie && !isLogin) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/admin/login";
+      url.search = "";
+      if (pathname !== "/admin") url.searchParams.set("next", pathname);
+      return NextResponse.redirect(url);
+    }
+    return NextResponse.next();
   }
 
-  const { response, user } = await updateSession(request);
-
-  if (!user && !isLogin) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/admin/login";
-    url.search = "";
-    if (pathname !== "/admin") url.searchParams.set("next", pathname);
-    return NextResponse.redirect(url);
+  if (pathname.startsWith("/account")) {
+    if (!sessionCookie) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/sign-in";
+      url.search = "";
+      url.searchParams.set("next", pathname);
+      return NextResponse.redirect(url);
+    }
   }
 
-  return response;
+  return NextResponse.next();
 }
 
 export const config = {
-  matcher: ["/admin/:path*"],
+  matcher: ["/admin/:path*", "/account/:path*"],
 };

@@ -10,11 +10,32 @@ export function AddToBagButton({ product }: { product: StoreProduct }) {
   const [quantity, setQuantity] = useState(1);
   const [added, setAdded] = useState(false);
 
+  const isOutOfStock =
+    product.availability === "in_stock" &&
+    typeof product.stock_quantity === "number" &&
+    product.stock_quantity <= 0;
+
+  const maxQuantity =
+    product.availability === "in_stock" &&
+    typeof product.stock_quantity === "number" &&
+    product.stock_quantity > 0
+      ? product.stock_quantity
+      : 99;
+
   const handleAdd = () => {
+    if (isOutOfStock) return;
     addItem(product, quantity);
     setAdded(true);
     setTimeout(() => setAdded(false), 1800);
   };
+
+  if (isOutOfStock) {
+    return (
+      <div className="border border-ink/15 bg-ivory-dark/70 px-4 py-3.5 text-center text-xs font-semibold uppercase tracking-[0.18em] text-ink/55">
+        Currently Sold Out · Enquire via WhatsApp for Next Batch
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-wrap items-stretch gap-3">
@@ -32,7 +53,7 @@ export function AddToBagButton({ product }: { product: StoreProduct }) {
         </span>
         <button
           type="button"
-          onClick={() => setQuantity((q) => q + 1)}
+          onClick={() => setQuantity((q) => Math.min(maxQuantity, q + 1))}
           aria-label="Increase quantity"
           className="px-4 py-3.5 text-ink/70 transition-colors hover:text-ink"
         >

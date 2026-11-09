@@ -1,7 +1,7 @@
 "use client";
 /* eslint-disable @next/next/no-img-element */
 
-import { ArrowDown, ArrowUp, ImagePlus, Star } from "lucide-react";
+import { ArrowDown, ArrowUp, ImagePlus, Link2, Star } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useRef, useState } from "react";
 import {
@@ -13,33 +13,36 @@ import {
 } from "@/actions/images";
 import { ConfirmButton } from "@/components/ui/ConfirmButton";
 import { Notice } from "@/components/ui/Notice";
-import { BUCKETS, IMAGE_LIMITS } from "@/lib/env";
-import { createClient } from "@/lib/supabase/client";
+import { IMAGE_LIMITS } from "@/lib/env";
 import type { ProjectImage } from "@/types";
 import { useRunAction } from "./hooks";
 
 type ImageWithUrl = ProjectImage & { url: string };
 
-const EXTENSIONS: Record<string, string> = {
-  "image/jpeg": "jpg",
-  "image/png": "png",
-  "image/webp": "webp",
-  "image/avif": "avif",
-};
+const ALLOWED_TYPES = new Set<string>(IMAGE_LIMITS.projectTypes);
 
-function readDimensions(file: File): Promise<{ width: number; height: number } | null> {
-  return new Promise((resolve) => {
-    const url = URL.createObjectURL(file);
-    const img = new Image();
-    img.onload = () => {
-      resolve({ width: img.naturalWidth, height: img.naturalHeight });
-      URL.revokeObjectURL(url);
+function fileToDataUrlAndDimensions(
+  file: File,
+): Promise<{ dataUrl: string; width: number | null; height: number | null }> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error("Could not read file."));
+    reader.onload = () => {
+      const dataUrl = String(reader.result ?? "");
+      const img = new Image();
+      img.onload = () => {
+        resolve({
+          dataUrl,
+          width: img.naturalWidth || null,
+          height: img.naturalHeight || null,
+        });
+      };
+      img.onerror = () => {
+        resolve({ dataUrl, width: null, height: null });
+      };
+      img.src = dataUrl;
     };
-    img.onerror = () => {
-      resolve(null);
-      URL.revokeObjectURL(url);
-    };
-    img.src = url;
+    reader.readAsDataURL(file);
   });
 }
 
@@ -52,16 +55,26 @@ export function ImageManager({
 }) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
-  const [progress, setProgress] = useState<{ current: number; total: number; name: string } | null>(null);
+  const [imageUrlInput, setImageUrlInput] = useState("");
+  const [progress, setProgress] = useState<{
+    current: number;
+    total: number;
+    name: string;
+  } | null>(null);
   const [problems, setProblems] = useState<string[]>([]);
-  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(
+    null,
+  );
 
   async function handleFiles(fileList: FileList | null) {
     if (!fileList || fileList.length === 0) return;
     const files = Array.from(fileList);
-    const supabase = createClient();
     const issues: string[] = [];
-    const uploaded: { path: string; width: number | null; height: number | null }[] = [];
+    const uploaded: {
+      path: string;
+      width: number | null;
+      height: number | null;
+    }[] = [];
 
     setResult(null);
     setProblems([]);
@@ -70,8 +83,10 @@ export function ImageManager({
       const file = files[i];
       setProgress({ current: i + 1, total: files.length, name: file.name });
 
-      if (!(file.type in EXTENSIONS)) {
-        issues.push(`${file.name}: unsupported format. Use JPEG, PNG, WebP or AVIF.`);
+      if (!ALLOWED_TYPES.has(file.type)) {
+        issues.push(
+          `${file.name}: unsupported format. Use JPEG, PNG, WebP or AVIF.`,
+        );
         continue;
       }
       if (file.size > IMAGE_LIMITS.projectMaxBytes) {
@@ -79,18 +94,13 @@ export function ImageManager({
         continue;
       }
 
-      const dims = await readDimensions(file);
-      const path = `projects/${projectId}/${crypto.randomUUID()}.${EXTENSIONS[file.type]}`;
-      const { error } = await supabase.storage.from(BUCKETS.projects).upload(path, file, {
-        contentType: file.type,
-        cacheControl: "31536000",
-        upsert: false,
-      });
-      if (error) {
-        issues.push(`${file.name}: upload failed (${error.message}).`);
-        continue;
+      try {
+        const { dataUrl, width, height } =
+          await fileToDataUrlAndDimensions(file);
+        uploaded.push({ path: dataUrl, width, height });
+      } catch {
+        issues.push(`${file.name}: could not process image.`);
       }
-      uploaded.push({ path, width: dims?.width ?? null, height: dims?.height ?? null });
     }
 
     setProgress(null);
@@ -109,8 +119,25 @@ export function ImageManager({
     if (inputRef.current) inputRef.current.value = "";
   }
 
+  async function handleAddByUrl() {
+    const trimmed = imageUrlInput.trim();
+    if (!trimmed) return;
+    setResult(null);
+    setProblems([]);
+
+    const saved = await addProjectImages(projectId, [
+      { path: trimmed, width: 1600, height: 1200 },
+    ]);
+    if (saved.ok) {
+      setResult({ ok: true, message: "Image added." });
+      setImageUrlInput("");
+      router.refresh();
+    } else {
+      setProblems([saved.message ?? "Could not add image URL."]);
+    }
+  }
+
   const uploading = progress !== null;
-  const percent = progress ? Math.round(((progress.current - 1) / progress.total) * 100) : 0;
 
   return (
     <section className="admin-card space-y-6" aria-labelledby="images">
@@ -119,52 +146,64 @@ export function ImageManager({
           Images
         </h2>
         <p className="mt-1 text-sm text-ink/70">
-          Upload JPEG, PNG, WebP or AVIF photographs up to 10 MB each. The first image becomes the
-          cover; change it any time. Add alt text so the photographs are accessible.
+          Upload JPEG, PNG, WebP or AVIF photographs, or add an image path/URL.
+          The first image becomes the cover; change it any time.
         </p>
       </div>
 
-      <div>
-        <label
-          htmlFor="image-upload"
-          className={`btn-dark cursor-pointer ${uploading ? "pointer-events-none opacity-60" : ""}`}
-        >
-          <ImagePlus className="h-4 w-4" aria-hidden /> Upload images
-        </label>
-        <input
-          ref={inputRef}
-          id="image-upload"
-          type="file"
-          multiple
-          accept={IMAGE_LIMITS.projectTypes.join(",")}
-          className="sr-only"
-          disabled={uploading}
-          onChange={(e) => handleFiles(e.target.files)}
-        />
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <label
+            htmlFor="image-upload"
+            className={`btn-dark cursor-pointer ${uploading ? "pointer-events-none opacity-60" : ""}`}
+          >
+            <ImagePlus className="h-4 w-4" aria-hidden /> Upload images
+          </label>
+          <input
+            ref={inputRef}
+            id="image-upload"
+            type="file"
+            multiple
+            accept={IMAGE_LIMITS.projectTypes.join(",")}
+            className="sr-only"
+            disabled={uploading}
+            onChange={(e) => handleFiles(e.target.files)}
+          />
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <input
+            type="text"
+            value={imageUrlInput}
+            onChange={(e) => setImageUrlInput(e.target.value)}
+            placeholder="Or paste image path/URL (e.g. /images/portfolio/ikoyi-penthouse-cover.jpg or https://...)"
+            className="field-input flex-1"
+          />
+          <button
+            type="button"
+            onClick={handleAddByUrl}
+            disabled={!imageUrlInput.trim() || uploading}
+            className="btn-outline btn-sm"
+          >
+            <Link2 className="h-4 w-4" aria-hidden /> Add by URL
+          </button>
+        </div>
 
         {progress && (
-          <div className="mt-4" aria-live="polite">
-            <p className="text-sm">
-              Uploading {progress.current} of {progress.total}: <span className="font-medium">{progress.name}</span>
-            </p>
-            <div
-              role="progressbar"
-              aria-valuemin={0}
-              aria-valuemax={100}
-              aria-valuenow={percent}
-              aria-label="Upload progress"
-              className="mt-2 h-2 w-full bg-ink/10"
-            >
-              <div className="h-full bg-gold transition-all" style={{ width: `${percent}%` }} />
-            </div>
-          </div>
+          <p className="text-sm text-ink/80" aria-live="polite">
+            Processing {progress.current} of {progress.total}:{" "}
+            <span className="font-medium">{progress.name}</span>
+          </p>
         )}
 
-        <div className="mt-4 space-y-2">
+        <div className="space-y-2">
           <Notice state={result} />
           {problems.length > 0 && (
-            <div role="alert" className="border border-red-700/30 bg-red-50 px-4 py-3 text-sm text-red-900">
-              <p className="font-medium">Some files could not be uploaded:</p>
+            <div
+              role="alert"
+              className="border border-red-700/30 bg-red-50 px-4 py-3 text-sm text-red-900"
+            >
+              <p className="font-medium">Some files could not be added:</p>
               <ul className="mt-1 list-disc pl-5">
                 {problems.map((p) => (
                   <li key={p}>{p}</li>
@@ -177,8 +216,9 @@ export function ImageManager({
 
       {images.length === 0 ? (
         <div className="border border-dashed border-ink/25 px-6 py-12 text-center text-sm text-ink/60">
-          No images yet. Upload photographs to build this project&rsquo;s gallery. A project needs at
-          least one image before it can be published.
+          No images yet. Upload photographs to build this project&rsquo;s
+          gallery. A project needs at least one image before it can be
+          published.
         </div>
       ) : (
         <ul className="grid gap-5 lg:grid-cols-2">
@@ -211,12 +251,18 @@ function ImageCard({
   const { run, pending, notice } = useRunAction();
   const [caption, setCaption] = useState(image.caption ?? "");
   const [alt, setAlt] = useState(image.alt_text ?? "");
-  const dirty = caption !== (image.caption ?? "") || alt !== (image.alt_text ?? "");
+  const dirty =
+    caption !== (image.caption ?? "") || alt !== (image.alt_text ?? "");
 
   return (
     <li className="border border-ink/10 bg-ivory/50">
       <div className="relative aspect-[4/3] bg-ink/10">
-        <img src={image.url} alt={image.alt_text ?? ""} className="h-full w-full object-cover" loading="lazy" />
+        <img
+          src={image.url}
+          alt={image.alt_text ?? ""}
+          className="h-full w-full object-cover"
+          loading="lazy"
+        />
         {image.is_cover && (
           <span className="absolute left-2 top-2 inline-flex items-center gap-1 bg-gold px-2 py-1 text-xs font-medium text-ink">
             <Star className="h-3 w-3" aria-hidden /> Cover
@@ -243,7 +289,10 @@ function ImageCard({
           />
         </div>
         <div>
-          <label htmlFor={`caption-${image.id}`} className="field-label text-xs">
+          <label
+            htmlFor={`caption-${image.id}`}
+            className="field-label text-xs"
+          >
             Caption (optional)
           </label>
           <input
@@ -260,7 +309,11 @@ function ImageCard({
             type="button"
             className="btn-dark btn-sm"
             disabled={pending || !dirty}
-            onClick={() => run(() => updateImageDetails(image.id, { caption, alt_text: alt }))}
+            onClick={() =>
+              run(() =>
+                updateImageDetails(image.id, { caption, alt_text: alt }),
+              )
+            }
           >
             Save details
           </button>
@@ -296,7 +349,7 @@ function ImageCard({
           <ConfirmButton
             label="Delete"
             title="Delete this image?"
-            description="The image will be permanently removed from this project and from storage."
+            description="The image will be permanently removed from this project."
             onConfirm={() => run(() => deleteImage(image.id))}
             disabled={pending}
           />
