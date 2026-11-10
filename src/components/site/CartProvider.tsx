@@ -471,13 +471,15 @@ export function CartTrigger() {
       type="button"
       onClick={openCart}
       aria-label={`Open shopping bag (${totalItems} items)`}
-      className="relative inline-flex h-10 items-center gap-2 border border-ivory/25 px-3.5 text-xs font-semibold uppercase tracking-[0.16em] text-ivory transition-colors hover:border-gold hover:text-gold"
+      className="relative inline-flex items-center gap-2 py-1 text-xs font-medium uppercase tracking-[0.18em] text-ivory/80 transition-colors hover:text-gold"
     >
       <ShoppingBag className="h-4 w-4 text-gold" aria-hidden />
       <span className="hidden sm:inline">Bag</span>
-      <span className="inline-flex h-5 min-w-[1.25rem] items-center justify-center bg-gold px-1.5 text-[0.68rem] font-bold text-ink">
-        {totalItems}
-      </span>
+      {totalItems > 0 && (
+        <span className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-gold px-1 text-[0.62rem] font-bold leading-none text-ink">
+          {totalItems}
+        </span>
+      )}
     </button>
   );
 }

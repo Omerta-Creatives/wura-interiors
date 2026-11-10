@@ -1,6 +1,6 @@
 "use client";
 
-import { Menu, X } from "lucide-react";
+import { Menu, User, X } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
@@ -11,7 +11,7 @@ export type NavLink = { href: string; label: string };
 export function DesktopNav({ links }: { links: NavLink[] }) {
   const pathname = usePathname();
   return (
-    <nav aria-label="Main" className="hidden items-center gap-8 lg:flex">
+    <nav aria-label="Main" className="hidden items-center gap-9 lg:flex">
       {links.map((link) => {
         const active =
           link.href === "/" ? pathname === "/" : pathname.startsWith(link.href);
@@ -21,8 +21,8 @@ export function DesktopNav({ links }: { links: NavLink[] }) {
             href={link.href}
             aria-current={active ? "page" : undefined}
             className={cn(
-              "relative py-1 text-xs font-semibold uppercase tracking-[0.2em] transition-colors hover:text-gold",
-              active ? "text-gold" : "text-ivory/80",
+              "relative py-1 text-xs font-medium uppercase tracking-[0.2em] transition-colors hover:text-gold",
+              active ? "text-gold" : "text-ivory/75",
             )}
           >
             {link.label}
@@ -39,7 +39,15 @@ export function DesktopNav({ links }: { links: NavLink[] }) {
   );
 }
 
-export function MobileNav({ links }: { links: NavLink[] }) {
+export function MobileNav({
+  links,
+  accountHref = "/sign-in",
+  accountLabel = "Sign In",
+}: {
+  links: NavLink[];
+  accountHref?: string;
+  accountLabel?: string;
+}) {
   const [open, setOpen] = useState(false);
   const pathname = usePathname();
 
@@ -60,7 +68,7 @@ export function MobileNav({ links }: { links: NavLink[] }) {
         aria-controls="mobile-menu"
         aria-label={open ? "Close menu" : "Open menu"}
         onClick={() => setOpen((v) => !v)}
-        className="inline-flex h-10 w-10 items-center justify-center border border-ivory/20 text-ivory hover:border-gold hover:text-gold"
+        className="inline-flex h-10 w-10 items-center justify-center text-ivory/85 transition-colors hover:text-gold"
       >
         {open ? <X className="h-5 w-5" aria-hidden /> : <Menu className="h-5 w-5" aria-hidden />}
       </button>
@@ -97,6 +105,16 @@ export function MobileNav({ links }: { links: NavLink[] }) {
               );
             })}
           </ul>
+
+          <div className="mt-6 border-t border-ivory/15 pt-5">
+            <Link
+              href={accountHref}
+              className="inline-flex items-center gap-2.5 text-xs font-semibold uppercase tracking-[0.2em] text-ivory/80 transition-colors hover:text-gold"
+            >
+              <User className="h-4 w-4 text-gold" aria-hidden />
+              <span>{accountLabel}</span>
+            </Link>
+          </div>
         </nav>
       )}
     </div>
